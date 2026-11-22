@@ -184,9 +184,11 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-If you cannot push a tag, open **Actions → Release → Run workflow** and enter the
-version tag you want (`v1.0.0`); the same job builds, packages, creates the tag and
-publishes the release.
+The workflow also accepts two other entry points:
+
+* Push a commit to the `release` branch — the version is read from `Cargo.toml`
+  (`v1.0.0` for version `1.0.0`) and published.
+* Open **Actions → Release → Run workflow** and enter the tag you want.
 
 ### Release profile
 

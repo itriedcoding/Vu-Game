@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - release
   workflow_dispatch:
     inputs:
       version:
@@ -32,6 +34,22 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Resolve release tag
+        id: release_tag
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ inputs.version }}"
+          } elseif ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}"
+          } else {
+            $match = Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1
+            $tag = "v" + $match.Matches.Groups[1].Value
+          }
+          if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "Releasing $tag"
+
       - name: Validate
         run: |
           cargo fmt --all -- --check
@@ -44,7 +62,7 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          $tag = "${{ inputs.version || github.ref_name }}"
+          $tag = "${{ steps.release_tag.outputs.tag }}"
           $version = $tag.TrimStart("v")
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/volt.exe dist/Volt.exe
@@ -58,8 +76,8 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.version || github.ref_name }}
-          name: Volt ${{ inputs.version || github.ref_name }}
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: Volt ${{ steps.release_tag.outputs.tag }}
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -68,7 +86,7 @@ jobs:
             Volt-*-windows-x64.zip
             SHA256SUMS.txt
           body: |
-            Volt ${{ inputs.version || github.ref_name }} — a lightweight Roblox performance app for Windows 10 and 11.
+            Volt ${{ steps.release_tag.outputs.tag }} — a lightweight Roblox performance app for Windows 10 and 11.
 
             **Downloads**
             - `volt.exe` — portable 64-bit executable, no installer, no background service.
