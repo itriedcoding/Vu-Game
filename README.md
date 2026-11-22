@@ -184,6 +184,10 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
+If you cannot push a tag, open **Actions → Release → Run workflow** and enter the
+version tag you want (`v1.0.0`); the same job builds, packages, creates the tag and
+publishes the release.
+
 ### Release profile
 
 `opt-level = "z"`, fat LTO, one codegen unit, `panic = "abort"` and symbols stripped —
