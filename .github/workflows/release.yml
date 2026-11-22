@@ -94,8 +94,8 @@ jobs:
             - `SHA256SUMS.txt` — checksums for the archive.
 
             **Before you run it**
-            - Windows SmartScreen may warn about an unsigned binary. Choose *More info → Run anyway* if you trust the source, or build from source with `cargo build --release`.
-            - Volt needs no administrator rights for process priority or per-user Game Bar settings. The High performance power plan may need elevation on some systems; Volt reports that instead of hiding it.
+            - Windows shows one User Account Control prompt: Volt requests administrator rights in its manifest so machine-wide settings such as the active power plan can be applied *and* restored. Nothing else is requested afterwards.
+            - Windows SmartScreen may also warn about an unsigned binary. Choose *More info → Run anyway* if you trust the source, or build from source with `cargo build --release`.
 
             Volt never modifies Roblox files, never injects into the client and never touches anti-cheat, Defender or Windows services. Every change it makes can be undone from **Restore defaults**.
 

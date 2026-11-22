@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(1_000);
 const INSTALL_RESCAN: Duration = Duration::from_secs(30);
 const VERIFY_INTERVAL: Duration = Duration::from_secs(5);
+const MACHINE_RESCAN: Duration = Duration::from_secs(300);
 const HISTORY_LEN: usize = 90;
 
 pub struct Monitor {
@@ -107,6 +108,8 @@ struct Sampler {
     installs: Vec<RobloxInstall>,
     installs_at: Option<Instant>,
     verify_at: Option<Instant>,
+    info: Arc<platform::SystemInfo>,
+    info_at: Option<Instant>,
     items: Vec<ItemState>,
     roblox: RobloxState,
     apps: Vec<Recommendation>,
@@ -132,6 +135,8 @@ impl Sampler {
             installs: Vec::new(),
             installs_at: None,
             verify_at: None,
+            info: Arc::new(platform::system_info()),
+            info_at: None,
             items: Vec::new(),
             roblox: RobloxState::default(),
             apps: Vec::new(),
@@ -156,6 +161,8 @@ impl Sampler {
         };
 
         snapshot.system = self.system_sample(now);
+        self.refresh_info(now);
+        snapshot.info = Arc::clone(&self.info);
         self.sample_processes();
 
         snapshot.roblox = self.roblox_state();
@@ -276,6 +283,22 @@ impl Sampler {
         }
 
         roblox
+    }
+
+    /// Machine facts change rarely, so the static part is re-read every five
+    /// minutes; the active power plan name is fresh on every sample.
+    fn refresh_info(&mut self, now: Instant) {
+        let due = self
+            .info_at
+            .map(|at| now.duration_since(at) >= MACHINE_RESCAN)
+            .unwrap_or(true);
+        if due {
+            self.info_at = Some(now);
+            self.info = Arc::new(platform::system_info());
+        }
+        if let Some(name) = platform::active_power_plan_name() {
+            Arc::make_mut(&mut self.info).power_plan = name;
+        }
     }
 
     fn refresh_installs(&mut self, now: Instant) {

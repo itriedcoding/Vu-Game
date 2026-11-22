@@ -47,6 +47,9 @@ pub struct SavedState {
     pub optimize_runs: u32,
     #[serde(default)]
     pub last_optimized_unix: Option<u64>,
+    /// Re-apply the selected tweaks whenever a new Roblox Player process appears.
+    #[serde(default)]
+    pub auto_apply: bool,
 }
 
 impl Default for SavedState {
@@ -61,6 +64,7 @@ impl Default for SavedState {
             lifetime_cleaned_bytes: 0,
             optimize_runs: 0,
             last_optimized_unix: None,
+            auto_apply: false,
         }
     }
 }
@@ -160,5 +164,17 @@ mod tests {
         let restored: SavedState = serde_json::from_str("{\"version\":1}").expect("parse");
         assert_eq!(restored.version, 1);
         assert!(!restored.has_backups());
+        assert!(!restored.auto_apply);
+    }
+
+    #[test]
+    fn keeps_the_auto_apply_preference() {
+        let state = SavedState {
+            auto_apply: true,
+            ..SavedState::default()
+        };
+        let text = serde_json::to_string(&state).expect("serialise");
+        let restored: SavedState = serde_json::from_str(&text).expect("deserialise");
+        assert!(restored.auto_apply);
     }
 }

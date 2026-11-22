@@ -681,6 +681,8 @@ impl VoltApp {
         }
 
         ui.add_space(12.0);
+        self.auto_apply_row(ui);
+        ui.add_space(8.0);
 
         for item in ITEMS {
             let is_active = self
@@ -764,6 +766,50 @@ impl VoltApp {
         self.network_card(ui);
         ui.add_space(12.0);
         self.installs_card(ui);
+    }
+
+    fn auto_apply_row(&mut self, ui: &mut Ui) {
+        let on = self.auto_apply;
+        let mut toggle = false;
+
+        widgets::soft_card(ui, |ui| {
+            ui.horizontal(|ui| {
+                toggle = widgets::switch(ui, on).clicked();
+                ui.add_space(6.0);
+                let width = (ui.available_width() - 96.0).max(180.0);
+                ui.allocate_ui_with_layout(
+                    vec2(width, 0.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        ui.set_width(width);
+                        ui.label(
+                            RichText::new("Apply automatically when Roblox starts")
+                                .font(theme::medium(12.5))
+                                .color(theme::TEXT),
+                        );
+                        ui.add_space(1.0);
+                        ui.label(
+                            RichText::new(
+                                "Volt applies the selected tweaks within a second of a new Roblox Player process appearing, which matters when you rejoin. It only runs while Volt is open, and only for tweaks that are not already active.",
+                            )
+                            .font(theme::body(11.0))
+                            .color(theme::MUTED),
+                        );
+                    },
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    widgets::pill(
+                        ui,
+                        if on { "ON" } else { "OFF" },
+                        if on { theme::SUCCESS } else { theme::DIM },
+                    );
+                });
+            });
+        });
+
+        if toggle {
+            self.set_auto_apply(!on);
+        }
     }
 
     fn steps_card(&self, ui: &mut Ui, title: &str, steps: &[Step]) {

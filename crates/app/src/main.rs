@@ -8,6 +8,7 @@
 
 mod app;
 mod icon;
+mod system;
 mod theme;
 mod views;
 mod widgets;

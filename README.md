@@ -28,16 +28,21 @@ service — closing the window stops everything.
 * **Dashboard** — Roblox detection, CPU, RAM, Roblox process memory, frame rate
   when Roblox itself reports it, live optimisation status and the **Optimize
   Roblox** / **Restore defaults** buttons.
-* **Optimize** — five reversible tweaks, a ranked list of background programs
-  competing for CPU and memory, and memory guidance built from the current measurements.
+* **Optimize** — five reversible tweaks, an optional launch watcher that re-applies
+  them when Roblox starts again, a ranked list of background programs competing for
+  CPU and memory, and memory guidance built from the current measurements.
 * **Cleanup** — Roblox session logs, MicroProfiler captures, crash dumps and
   leftover Roblox temp files, with a measured "reclaimable now" figure.
+* **System** — CPU, GPU and driver version, Windows release and build, the active
+  power plan, elevation state, the full change ledger, and a diagnostics report you
+  can copy or save.
 
 ## Download
 
 1. Open the [Releases](https://github.com/itriedcoding/Vu-Game/releases) page and download `volt.exe` from the latest release
    (or `Volt-<version>-windows-x64.zip` if you also want the README and license).
-2. Run it. No installation step, no accounts, no first-run wizard.
+2. Run it and approve the User Account Control prompt. No installation step, no
+   accounts, no first-run wizard.
 
 Windows SmartScreen will warn about an unsigned binary. Choose **More info → Run
 anyway** if you trust the source, or build it yourself with the instructions below.
@@ -110,12 +115,32 @@ Files modified in the last two minutes, files that Windows refuses to delete, an
 anything outside those folders are skipped and reported. Installed client versions,
 assets, game content and account data are never touched.
 
-## Privileges
+## Administrator rights
 
-Volt runs without administrator rights for all process and per-user settings. The
-power plan change is the one item Windows may refuse for a standard user; when that
-happens the step is reported as failed with the actual error, and the Restore button
-still knows nothing was changed. Volt never asks for elevation on its own.
+Volt requests administrator rights in its application manifest
+(`crates/app/assets/volt.manifest`, embedded through the resource compiler), so Windows
+shows one User Account Control prompt at launch and the app then runs elevated. That
+is what makes the machine-scope work honest instead of half-done:
+
+* the active power plan can be switched **and** restored,
+* a background process owned by another session can actually be closed,
+* full process details are readable for every running program.
+
+If a copy of Volt is started without that manifest — for example a debug build made
+without the Windows resource compiler — the **System** page reports *Standard user* and
+offers **Relaunch elevated**, which restarts the app through `ShellExecuteW` with the
+`runas` verb. A change Windows refuses is always reported with the error it returned;
+Volt never claims a setting was applied when it was not.
+
+Elevation does not widen what Volt is allowed to touch. It still never edits Roblox
+files, never injects code and never touches Defender, Windows Update or any service.
+
+## Diagnostics
+
+**System → Save report** writes
+`%APPDATA%\Volt\reports\volt-report-YYYYMMDD-HHMMSS.txt` containing the measured
+values, the machine facts and the change ledger; **Copy to clipboard** puts the same
+text on the clipboard. The report is generated locally and is never uploaded.
 
 ## Build from source
 

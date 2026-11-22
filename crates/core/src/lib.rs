@@ -20,6 +20,7 @@ pub mod monitor;
 pub mod optimize;
 pub mod platform;
 pub mod recommend;
+pub mod report;
 pub mod roblox;
 pub mod state;
 

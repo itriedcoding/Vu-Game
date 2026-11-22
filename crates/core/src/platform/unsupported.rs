@@ -3,7 +3,7 @@
 //! This exists so the optimisation logic, parsers and state handling can be unit
 //! tested on any platform. Volt is only distributed for Windows.
 
-use super::{CpuTimes, MemoryInfo, PlatformError, ProcessEntry, Result};
+use super::{CpuTimes, MemoryInfo, PlatformError, ProcessEntry, Result, SystemInfo};
 use crate::model::Priority;
 use std::path::{Path, PathBuf};
 
@@ -94,5 +94,19 @@ pub fn active_power_scheme() -> Option<String> {
 pub fn set_active_power_scheme(_guid: &str) -> Result<()> {
     Err(PlatformError(
         "Power plan changes need the Windows build of Volt.".into(),
+    ))
+}
+
+pub fn active_power_plan_name() -> Option<String> {
+    None
+}
+
+pub fn system_info() -> SystemInfo {
+    SystemInfo::default()
+}
+
+pub fn relaunch_elevated() -> Result<()> {
+    Err(PlatformError(
+        "Elevation needs the Windows build of Volt.".into(),
     ))
 }

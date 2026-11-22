@@ -305,6 +305,47 @@ pub fn checkbox(ui: &mut Ui, checked: bool) -> Response {
     response
 }
 
+/// Sliding toggle for preferences that persist between launches.
+pub fn switch(ui: &mut Ui, on: bool) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(40.0, 22.0), Sense::click());
+    let t = ui
+        .ctx()
+        .animate_bool_with_time(response.id.with("switch"), on, 0.16);
+    let painter = ui.painter();
+    let radius = CornerRadius::same(11);
+
+    if t > 0.01 {
+        painter.rect_filled(
+            rect.expand(2.0),
+            CornerRadius::same(13),
+            theme::alpha(theme::ACCENT, (26.0 * t) as u8),
+        );
+    }
+    painter.rect_filled(
+        rect,
+        radius,
+        theme::mix(theme::CARD_HOVER, theme::ACCENT_DEEP, t),
+    );
+    painter.rect_stroke(
+        rect,
+        radius,
+        Stroke::new(1.0_f32, theme::mix(theme::BORDER, theme::ACCENT_BRIGHT, t)),
+        StrokeKind::Inside,
+    );
+
+    let knob_x = rect.left() + 11.0 + (rect.width() - 22.0) * t;
+    painter.circle_filled(
+        pos2(knob_x, rect.center().y),
+        8.0,
+        theme::mix(theme::MUTED, Color32::WHITE, t),
+    );
+
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
 /// A full-width navigation row with an icon and an active accent bar.
 pub fn nav_item(ui: &mut Ui, glyph: Glyph, label: &str, active: bool) -> Response {
     let width = ui.available_width();

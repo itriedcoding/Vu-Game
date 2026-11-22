@@ -57,6 +57,22 @@ impl CpuTimes {
     }
 }
 
+/// Facts about this machine, read from Windows once and refreshed occasionally.
+///
+/// Everything here is reported verbatim; Volt never substitutes a plausible
+/// value when Windows does not expose one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SystemInfo {
+    pub cpu: String,
+    pub gpu: String,
+    pub gpu_driver: String,
+    /// Product name, release and build, e.g. `Windows 11 Pro · 24H2 · build 26100.2314`.
+    pub os: String,
+    pub logical_cores: u32,
+    /// Friendly name of the active power plan, e.g. `High performance`.
+    pub power_plan: String,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MemoryInfo {
     pub total: u64,
@@ -91,9 +107,10 @@ pub struct ProcessEntry {
 }
 
 pub use imp::{
-    active_power_scheme, app_data, cpu_times, delete_registry_value, is_elevated, is_supported,
-    list_processes, local_app_data, memory, open_folder, priority, process_path, registry_dword,
-    reveal_path, set_active_power_scheme, set_priority, set_registry_dword, temp_dir, terminate,
+    active_power_plan_name, active_power_scheme, app_data, cpu_times, delete_registry_value,
+    is_elevated, is_supported, list_processes, local_app_data, memory, open_folder, priority,
+    process_path, registry_dword, relaunch_elevated, reveal_path, set_active_power_scheme,
+    set_priority, set_registry_dword, system_info, temp_dir, terminate,
 };
 
 #[cfg(test)]

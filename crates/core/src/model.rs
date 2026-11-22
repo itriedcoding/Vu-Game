@@ -1,6 +1,8 @@
 //! Shared data types used by the engine and the interface.
 
+use crate::platform::SystemInfo;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Windows process priority classes Volt understands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -141,6 +143,8 @@ pub struct Snapshot {
     /// False on builds without a Windows backend.
     pub platform_ready: bool,
     pub elevated: bool,
+    /// Machine facts (CPU, GPU, Windows build) and the active power plan.
+    pub info: Arc<SystemInfo>,
     pub system: SystemSnapshot,
     pub roblox: RobloxState,
     pub apps: Vec<Recommendation>,

@@ -1,13 +1,16 @@
 //! Vector iconography. Everything is painted with the egui painter, so the UI has
 //! no image assets to load and stays crisp at any DPI.
 
-use eframe::egui::{self, pos2, Color32, Painter, Pos2, Rect, Shape, Stroke};
+use eframe::egui::{
+    self, pos2, Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Glyph {
     Gauge,
     Bolt,
     Sparkles,
+    Chip,
     Check,
     Close,
 }
@@ -82,6 +85,41 @@ pub fn paint(painter: &Painter, rect: Rect, glyph: Glyph, color: Color32, weight
             star(p(0.42, 0.60), rect.width() * 0.20);
             star(p(0.74, 0.30), rect.width() * 0.11);
             painter.circle_filled(p(0.28, 0.30), weight * 0.9, color);
+        }
+        Glyph::Chip => {
+            let pad = rect.width() * 0.24;
+            let body = rect.shrink(pad);
+            painter.rect_stroke(
+                body,
+                CornerRadius::same(2),
+                Stroke::new(weight, color),
+                StrokeKind::Inside,
+            );
+            painter.rect_filled(
+                body.shrink(rect.width() * 0.07),
+                CornerRadius::same(1),
+                color,
+            );
+            for step in 1..4 {
+                let x = body.left() + body.width() * step as f32 / 4.0;
+                painter.line_segment(
+                    [pos2(x, body.top() - pad * 0.62), pos2(x, body.top())],
+                    stroke,
+                );
+                painter.line_segment(
+                    [pos2(x, body.bottom()), pos2(x, body.bottom() + pad * 0.62)],
+                    stroke,
+                );
+                let y = body.top() + body.height() * step as f32 / 4.0;
+                painter.line_segment(
+                    [pos2(body.left() - pad * 0.62, y), pos2(body.left(), y)],
+                    stroke,
+                );
+                painter.line_segment(
+                    [pos2(body.right(), y), pos2(body.right() + pad * 0.62, y)],
+                    stroke,
+                );
+            }
         }
         Glyph::Check => {
             painter.add(Shape::line(

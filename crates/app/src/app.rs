@@ -8,6 +8,7 @@ use eframe::egui::{
     Stroke, StrokeKind, Ui, Vec2,
 };
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime};
@@ -17,6 +18,7 @@ use volt_core::model::Snapshot;
 use volt_core::monitor::Monitor;
 use volt_core::optimize::{self, ApplyReport, RestoreReport, ITEMS};
 use volt_core::platform;
+use volt_core::report;
 use volt_core::roblox;
 use volt_core::state::{self, SavedState};
 
@@ -25,6 +27,7 @@ pub enum View {
     Dashboard,
     Optimize,
     Cleanup,
+    System,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -162,6 +165,14 @@ pub struct VoltApp {
     pub(crate) confirm_restore: bool,
     pub(crate) confirm_end: Option<String>,
     pub(crate) jobs: Jobs,
+    /// Persisted: re-apply the selection when a new Roblox process appears.
+    pub(crate) auto_apply: bool,
+    /// Last Roblox Player PID automatic application ran for.
+    auto_pid: Option<u32>,
+    /// True while the in-flight apply job was started automatically.
+    auto_running: bool,
+    /// Where the last saved diagnostics report went.
+    pub(crate) report_path: Option<PathBuf>,
 }
 
 impl VoltApp {
@@ -171,13 +182,16 @@ impl VoltApp {
         let mut jobs = Jobs::new();
         jobs.scan();
 
+        let saved = state::load();
+        let auto_apply = saved.auto_apply;
+
         Self {
             monitor: Monitor::start(),
             snapshot: Snapshot {
                 platform_ready: platform::is_supported(),
                 ..Default::default()
             },
-            saved: state::load(),
+            saved,
             view: View::Dashboard,
             selected: ITEMS.iter().map(|item| item.id.to_owned()).collect(),
             scan: None,
@@ -190,6 +204,10 @@ impl VoltApp {
             confirm_restore: false,
             confirm_end: None,
             jobs,
+            auto_apply,
+            auto_pid: None,
+            auto_running: false,
+            report_path: None,
         }
     }
 
@@ -225,6 +243,102 @@ impl VoltApp {
         self.monitor.wake();
     }
 
+    /// Turn the launch watcher on or off and persist the choice.
+    pub(crate) fn set_auto_apply(&mut self, enabled: bool) {
+        self.auto_apply = enabled;
+        self.saved.auto_apply = enabled;
+        if !enabled {
+            self.auto_pid = None;
+        }
+        match state::save(&self.saved) {
+            Ok(()) => self.push_toast(
+                if enabled {
+                    "Volt will apply your selected tweaks whenever Roblox starts.".to_owned()
+                } else {
+                    "Automatic application is off.".to_owned()
+                },
+                ToastTone::Info,
+            ),
+            Err(err) => {
+                self.push_toast(format!("Preference not saved: {err}"), ToastTone::Error);
+            }
+        }
+    }
+
+    /// Apply the selection once per new Roblox Player process, but only for items
+    /// that are not already active. Runs on the same worker thread as a manual click.
+    fn maybe_auto_apply(&mut self) {
+        if !self.auto_apply {
+            self.auto_pid = self.snapshot.roblox.pid;
+            return;
+        }
+
+        let Some(pid) = self.snapshot.roblox.pid else {
+            self.auto_pid = None;
+            return;
+        };
+
+        if self.auto_pid == Some(pid) || self.any_busy() || self.selected.is_empty() {
+            return;
+        }
+
+        let pending: Vec<String> = self
+            .selected
+            .iter()
+            .filter(|id| {
+                self.snapshot
+                    .items
+                    .iter()
+                    .any(|state| state.id == id.as_str() && !state.active)
+            })
+            .cloned()
+            .collect();
+
+        self.auto_pid = Some(pid);
+        if pending.is_empty() {
+            return;
+        }
+
+        self.auto_running = true;
+        self.busy = Some("auto");
+        self.jobs.send(Job::Apply(pending));
+        self.monitor.wake();
+    }
+
+    /// Write the diagnostics report next to the saved state.
+    pub(crate) fn save_report(&mut self) {
+        let Some(directory) = platform::app_data().map(|dir| dir.join("Volt").join("reports"))
+        else {
+            self.push_toast(
+                "The Windows profile folder is unavailable.".to_owned(),
+                ToastTone::Error,
+            );
+            return;
+        };
+
+        let text = report::build(&self.snapshot, &self.saved);
+        let name = format!(
+            "volt-report-{}.txt",
+            report::file_stamp(volt_core::now_unix())
+        );
+        let path = directory.join(name);
+
+        let result = std::fs::create_dir_all(&directory).and_then(|_| std::fs::write(&path, text));
+        match result {
+            Ok(()) => {
+                self.push_toast(
+                    format!("Report saved to {}", path.display()),
+                    ToastTone::Success,
+                );
+                self.report_path = Some(path);
+            }
+            Err(err) => self.push_toast(
+                format!("Could not save the report: {err}"),
+                ToastTone::Error,
+            ),
+        }
+    }
+
     pub(crate) fn start_restore(&mut self) {
         if self.any_busy() {
             return;
@@ -244,25 +358,46 @@ impl VoltApp {
             match update {
                 JobUpdate::Apply(report, saved) => {
                     self.saved = saved;
+                    let automatic = std::mem::take(&mut self.auto_running);
                     let failures = report.failures();
                     let applied = report.applied();
                     if failures > 0 {
                         self.push_toast(
-                            format!("Optimization finished with {failures} issue(s). Review the details."),
+                            if automatic {
+                                format!(
+                                    "Roblox started, but {failures} automatic change(s) failed. See Optimize for the reason."
+                                )
+                            } else {
+                                format!(
+                                    "Optimization finished with {failures} issue(s). Review the details."
+                                )
+                            },
                             ToastTone::Error,
                         );
                     } else if applied == 0 {
                         self.push_toast(
-                            "Nothing needed changing — everything selected was already active."
-                                .to_owned(),
+                            if automatic {
+                                "Roblox started — every selected tweak was already active."
+                                    .to_owned()
+                            } else {
+                                "Nothing needed changing — everything selected was already active."
+                                    .to_owned()
+                            },
                             ToastTone::Info,
                         );
                     } else {
                         self.push_toast(
-                            format!(
-                                "{applied} optimization{} applied. Changes are reversible.",
-                                if applied == 1 { "" } else { "s" }
-                            ),
+                            if automatic {
+                                format!(
+                                    "Roblox started — {applied} tweak{} applied automatically.",
+                                    if applied == 1 { "" } else { "s" }
+                                )
+                            } else {
+                                format!(
+                                    "{applied} optimization{} applied. Changes are reversible.",
+                                    if applied == 1 { "" } else { "s" }
+                                )
+                            },
                             ToastTone::Success,
                         );
                     }
@@ -422,6 +557,11 @@ impl VoltApp {
                 {
                     self.view = View::Cleanup;
                 }
+                ui.add_space(3.0);
+                if widgets::nav_item(ui, Glyph::Chip, "System", self.view == View::System).clicked()
+                {
+                    self.view = View::System;
+                }
 
                 ui.add_space(24.0);
                 widgets::divider(ui);
@@ -492,6 +632,10 @@ impl VoltApp {
                 "Cleanup",
                 "Roblox logs, crash dumps and temporary files — never game content.",
             ),
+            View::System => (
+                "System",
+                "Hardware, Windows build, privileges and every change Volt has recorded.",
+            ),
         };
 
         ui.horizontal(|ui| {
@@ -519,6 +663,22 @@ impl VoltApp {
                         "Roblox not running"
                     },
                     if running { theme::SUCCESS } else { theme::DIM },
+                );
+
+                ui.add_space(6.0);
+                let elevated = self.snapshot.elevated;
+                status_pill(
+                    ui,
+                    if elevated {
+                        "Administrator"
+                    } else {
+                        "Standard user"
+                    },
+                    if elevated {
+                        theme::ACCENT_BRIGHT
+                    } else {
+                        theme::DIM
+                    },
                 );
 
                 if self.any_busy() {
@@ -555,6 +715,7 @@ impl VoltApp {
                             View::Dashboard => self.dashboard(ui),
                             View::Optimize => self.optimize(ui),
                             View::Cleanup => self.cleanup(ui),
+                            View::System => self.system(ui),
                         }
 
                         ui.add_space(20.0);
@@ -646,6 +807,7 @@ impl eframe::App for VoltApp {
         if let Some(snapshot) = self.monitor.latest() {
             self.snapshot = snapshot;
         }
+        self.maybe_auto_apply();
         self.prune_toasts();
 
         if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {

@@ -4,7 +4,7 @@
 //! implemented here. No code is injected into any process and no Roblox file is
 //! modified.
 
-use super::{CpuTimes, MemoryInfo, PlatformError, ProcessEntry, Result};
+use super::{CpuTimes, MemoryInfo, PlatformError, ProcessEntry, Result, SystemInfo};
 use crate::model::Priority;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
@@ -15,11 +15,13 @@ use windows::Win32::Foundation::{
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
-use windows::Win32::System::Power::{PowerGetActiveScheme, PowerSetActiveScheme};
+use windows::Win32::System::Power::{
+    PowerGetActiveScheme, PowerReadFriendlyName, PowerSetActiveScheme,
+};
 use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows::Win32::System::Registry::{
-    RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_DWORD,
-    RRF_RT_REG_DWORD,
+    RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
+    REG_DWORD, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
 };
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::{
@@ -29,7 +31,8 @@ use windows::Win32::System::Threading::{
     PROCESS_CREATION_FLAGS, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     PROCESS_SET_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ, REALTIME_PRIORITY_CLASS,
 };
-use windows::Win32::UI::Shell::IsUserAnAdmin;
+use windows::Win32::UI::Shell::{IsUserAnAdmin, ShellExecuteW};
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 /// Windows FILETIME epoch (1601-01-01) to Unix epoch difference, in seconds.
 const FILETIME_UNIX_OFFSET: u64 = 11_644_473_600;
@@ -261,16 +264,94 @@ pub fn delete_registry_value(path: &str, name: &str) -> Result<()> {
 }
 
 pub fn active_power_scheme() -> Option<String> {
-    let mut raw: *mut GUID = std::ptr::null_mut();
-    let status = unsafe { PowerGetActiveScheme(None, &mut raw) };
-    if status != ERROR_SUCCESS || raw.is_null() {
+    active_power_guid().map(|scheme| guid_to_string(&scheme))
+}
+
+/// Friendly name of the active power plan, read from `powrprof`.
+pub fn active_power_plan_name() -> Option<String> {
+    let scheme = active_power_guid()?;
+
+    let mut size: u32 = 0;
+    let _ = unsafe { PowerReadFriendlyName(None, Some(&scheme), None, None, None, &mut size) };
+    if size == 0 {
         return None;
     }
-    let scheme = unsafe { *raw };
-    unsafe {
-        let _ = LocalFree(Some(HLOCAL(raw as *mut c_void)));
+
+    let mut buffer = vec![0u8; size as usize];
+    let status = unsafe {
+        PowerReadFriendlyName(
+            None,
+            Some(&scheme),
+            None,
+            None,
+            Some(buffer.as_mut_ptr()),
+            &mut size,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
     }
-    Some(guid_to_string(&scheme))
+
+    let units: Vec<u16> = buffer
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect();
+    let name = string_from_wide(&units).trim().to_owned();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// Machine facts for the System page and the diagnostics report.
+pub fn system_info() -> SystemInfo {
+    let cpu = machine_string(CPU_KEY, "ProcessorNameString")
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Not reported".to_owned());
+    let (gpu, gpu_driver) = graphics_adapter();
+
+    SystemInfo {
+        cpu,
+        gpu,
+        gpu_driver,
+        os: windows_label(),
+        logical_cores: std::thread::available_parallelism()
+            .map(|value| value.get() as u32)
+            .unwrap_or(0),
+        power_plan: active_power_plan_name().unwrap_or_else(|| "Not reported".to_owned()),
+    }
+}
+
+/// Ask Windows to start a new, elevated copy of Volt.
+pub fn relaunch_elevated() -> Result<()> {
+    if is_elevated() {
+        return Ok(());
+    }
+
+    let exe = std::env::current_exe()
+        .map_err(|err| PlatformError(format!("Could not find Volt's own executable: {err}")))?;
+    let file = wide(&exe.display().to_string());
+    let verb = wide("runas");
+
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(file.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if result.0 as isize <= 32 {
+        return Err(PlatformError(
+            "Windows declined the elevation request. Approve the User Account Control prompt, or sign in with an administrator account."
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn set_active_power_scheme(guid: &str) -> Result<()> {
@@ -285,6 +366,161 @@ pub fn set_active_power_scheme(guid: &str) -> Result<()> {
             status.0
         )))
     }
+}
+
+// ---------------------------------------------------------------------------
+// machine information
+// ---------------------------------------------------------------------------
+
+const CPU_KEY: &str = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0";
+const GPU_CLASS_KEY: &str =
+    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+const WINDOWS_KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+
+fn active_power_guid() -> Option<GUID> {
+    let mut raw: *mut GUID = std::ptr::null_mut();
+    let status = unsafe { PowerGetActiveScheme(None, &mut raw) };
+    if status != ERROR_SUCCESS || raw.is_null() {
+        return None;
+    }
+    let scheme = unsafe { *raw };
+    unsafe {
+        let _ = LocalFree(Some(HLOCAL(raw as *mut c_void)));
+    }
+    Some(scheme)
+}
+
+/// The display adapter Windows reports for this machine. Laptops often list the
+/// integrated GPU first, so any non-basic adapter is preferred over the fallback.
+fn graphics_adapter() -> (String, String) {
+    let mut basic: Option<(String, String)> = None;
+
+    for index in 0..4 {
+        let path = format!("{GPU_CLASS_KEY}\\{index:04}");
+        let Some(description) = machine_string(&path, "DriverDesc") else {
+            continue;
+        };
+        let description = description.trim().to_owned();
+        if description.is_empty() {
+            continue;
+        }
+        let driver = machine_string(&path, "DriverVersion")
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        let candidate = (description, driver);
+
+        if candidate.0.starts_with("Microsoft Basic") {
+            basic.get_or_insert(candidate);
+            continue;
+        }
+        return candidate;
+    }
+
+    basic.unwrap_or_else(|| ("Not reported".to_owned(), String::new()))
+}
+
+/// Product name, release and build. Windows 11 still reports `Windows 10` as the
+/// product name, so the build number decides which one to show.
+fn windows_label() -> String {
+    let product = machine_string(WINDOWS_KEY, "ProductName").unwrap_or_default();
+    let release = machine_string(WINDOWS_KEY, "DisplayVersion").unwrap_or_default();
+    let build = machine_string(WINDOWS_KEY, "CurrentBuildNumber").unwrap_or_default();
+    let revision = machine_dword(WINDOWS_KEY, "UBR");
+
+    let build_number = build.trim().parse::<u32>().unwrap_or(0);
+    let product = product.trim();
+    let mut label = if build_number >= 22_000 && product.starts_with("Windows 10") {
+        product.replacen("Windows 10", "Windows 11", 1)
+    } else if product.is_empty() {
+        "Windows".to_owned()
+    } else {
+        product.to_owned()
+    };
+
+    let release = release.trim();
+    if !release.is_empty() {
+        label.push_str(" \u{b7} ");
+        label.push_str(release);
+    }
+
+    let build = build.trim();
+    if !build.is_empty() {
+        label.push_str(" \u{b7} build ");
+        label.push_str(build);
+        if let Some(revision) = revision {
+            label.push('.');
+            label.push_str(&revision.to_string());
+        }
+    }
+
+    label
+}
+
+fn machine_string(path: &str, name: &str) -> Option<String> {
+    registry_string(HKEY_LOCAL_MACHINE, path, name)
+}
+
+fn machine_dword(path: &str, name: &str) -> Option<u32> {
+    let path = wide(path);
+    let name = wide(name);
+    let mut value: u32 = 0;
+    let mut size: u32 = std::mem::size_of::<u32>() as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            PCWSTR(path.as_ptr()),
+            PCWSTR(name.as_ptr()),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut value as *mut u32 as *mut c_void),
+            Some(&mut size),
+        )
+    };
+    if status == ERROR_SUCCESS {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn registry_string(root: HKEY, path: &str, name: &str) -> Option<String> {
+    let path = wide(path);
+    let name = wide(name);
+
+    let mut size: u32 = 0;
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            PCWSTR(path.as_ptr()),
+            PCWSTR(name.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            Some(&mut size),
+        )
+    };
+    if status != ERROR_SUCCESS || size == 0 {
+        return None;
+    }
+
+    let mut buffer = vec![0u16; (size as usize).div_ceil(2) + 1];
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            PCWSTR(path.as_ptr()),
+            PCWSTR(name.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buffer.as_mut_ptr() as *mut c_void),
+            Some(&mut size),
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+
+    Some(string_from_wide(&buffer))
 }
 
 // ---------------------------------------------------------------------------
