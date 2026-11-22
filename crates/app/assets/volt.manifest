@@ -3,7 +3,7 @@
   <assemblyIdentity
       type="win32"
       name="Volt.Performance"
-      version="1.1.0.0"
+      version="1.1.1.0"
       processorArchitecture="*"/>
   <description>Volt - Roblox performance optimizer</description>
 

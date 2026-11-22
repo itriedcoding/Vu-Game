@@ -11,6 +11,7 @@
 use crate::model::{ItemState, Priority};
 use crate::platform;
 use crate::state::{RegBackup, SavedState};
+use std::collections::BTreeSet;
 
 pub const HIGH_PERFORMANCE_SCHEME: &str = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
 
@@ -470,6 +471,24 @@ fn restore_priority(step: &mut Step, state: &mut SavedState) {
     }
 }
 
+/// Selected entries that are not already active, in catalogue order.
+///
+/// This is what the launch watcher applies: a fresh Roblox process only needs the
+/// tweaks that are missing, so an already-optimised system produces no work and no
+/// registry churn.
+pub fn pending_ids(selected: &BTreeSet<String>, states: &[ItemState]) -> Vec<String> {
+    ITEMS
+        .iter()
+        .filter(|item| {
+            selected.contains(item.id)
+                && !states
+                    .iter()
+                    .any(|state| state.id == item.id && state.active)
+        })
+        .map(|item| item.id.to_owned())
+        .collect()
+}
+
 /// Live state of every catalogue entry, read straight from Windows.
 pub fn verify(roblox_priority: Option<Priority>, power_scheme: Option<String>) -> Vec<ItemState> {
     ITEMS
@@ -536,6 +555,33 @@ mod tests {
         let report = restore(&mut state);
         assert_eq!(report.restored, 0);
         assert!(report.steps.is_empty());
+    }
+
+    #[test]
+    fn pending_ids_skips_active_entries() {
+        let selected: BTreeSet<String> = ITEMS.iter().map(|item| item.id.to_owned()).collect();
+        let all_off = verify(None, None);
+        let pending = pending_ids(&selected, &all_off);
+        assert_eq!(pending.len(), ITEMS.len());
+        assert_eq!(pending.first().map(String::as_str), Some(ITEMS[0].id));
+
+        let mut mostly_on = verify(None, None);
+        for state in &mut mostly_on {
+            state.active = state.id != "game_mode";
+        }
+        let pending = pending_ids(&selected, &mostly_on);
+        assert_eq!(pending, vec!["game_mode".to_owned()]);
+
+        let only_one: BTreeSet<String> = ["power_plan".to_owned()].into_iter().collect();
+        assert_eq!(
+            pending_ids(&only_one, &all_off),
+            vec!["power_plan".to_owned()]
+        );
+        // `mostly_on` has power_plan active, so nothing is pending for that selection.
+        assert!(pending_ids(&only_one, &mostly_on).is_empty());
+
+        let unknown: BTreeSet<String> = ["not_an_item".to_owned()].into_iter().collect();
+        assert!(pending_ids(&unknown, &all_off).is_empty());
     }
 
     #[test]

@@ -243,22 +243,25 @@ impl VoltApp {
         self.monitor.wake();
     }
 
-    /// Turn the launch watcher on or off and persist the choice.
+    /// Turn the launch watcher on or off and persist the choice. Clearing the
+    /// remembered PID makes an already-running session count as new, so switching
+    /// the watcher on applies the missing tweaks immediately.
     pub(crate) fn set_auto_apply(&mut self, enabled: bool) {
         self.auto_apply = enabled;
         self.saved.auto_apply = enabled;
-        if !enabled {
-            self.auto_pid = None;
-        }
+        self.auto_pid = None;
+
+        let message = if !enabled {
+            "Automatic application is off.".to_owned()
+        } else if self.snapshot.roblox.running {
+            "Volt now keeps the selected tweaks applied for this session and every new one."
+                .to_owned()
+        } else {
+            "Volt will apply your selected tweaks whenever Roblox starts.".to_owned()
+        };
+
         match state::save(&self.saved) {
-            Ok(()) => self.push_toast(
-                if enabled {
-                    "Volt will apply your selected tweaks whenever Roblox starts.".to_owned()
-                } else {
-                    "Automatic application is off.".to_owned()
-                },
-                ToastTone::Info,
-            ),
+            Ok(()) => self.push_toast(message, ToastTone::Info),
             Err(err) => {
                 self.push_toast(format!("Preference not saved: {err}"), ToastTone::Error);
             }
@@ -282,17 +285,7 @@ impl VoltApp {
             return;
         }
 
-        let pending: Vec<String> = self
-            .selected
-            .iter()
-            .filter(|id| {
-                self.snapshot
-                    .items
-                    .iter()
-                    .any(|state| state.id == id.as_str() && !state.active)
-            })
-            .cloned()
-            .collect();
+        let pending = optimize::pending_ids(&self.selected, &self.snapshot.items);
 
         self.auto_pid = Some(pid);
         if pending.is_empty() {
