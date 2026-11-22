@@ -1,0 +1,19 @@
+[package]
+name = "volt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Volt - a lightweight Roblox FPS booster for Windows"
+
+[[bin]]
+name = "volt"
+path = "src/main.rs"
+
+[build-dependencies]
+winresource = "0.1"
+
+[dependencies]
+volt-core = { path = "../core" }
+eframe = { version = "0.32", default-features = false, features = ["glow", "default_fonts"] }
